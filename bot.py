@@ -30,7 +30,7 @@ Most importantly: If the user asks a question that requires a factual, detailed,
 Think 'knowledgeable friend on Discord'. Be smart, be helpful, but talk like a normal person online. Use the provided chat history for context if available.
 
 """ # Your desired system prompt
-MODEL_NAME = "gemini-2.5-flash-latest" # Free tier model
+MODEL_NAME = "gemini-2.5-flash-preview-04-17" # Free tier model
 HISTORY_LIMIT = 10 # How many past messages to look back at for context (adjust as needed)
 # --- >>> END EDIT <<< ---
 

@@ -19,14 +19,24 @@ if not GEMINI_API_KEY:
     sys.exit("Gemini API Key is missing.")
 
 # --- >>> EDIT THESE <<< ---
-SYSTEM_PROMPT = "You are a helpful and creative assistant." # Your desired system prompt
-MODEL_NAME = "gemini-1.5-flash-latest" # Free tier model
+SYSTEM_PROMPT = """
+
+You are a helpful AI assistant participating in a Discord chat. When appropriate, adopt the style of a knowledgeable and friendly Discord user.
+
+This means using common internet slang and abbreviations naturally (like smth, idk, tbh, ngl, lol, bc, kinda, tho, etc.), but don't overdo it or make it hard to read. Keep your tone casual and conversational. Your sentence structure should reflect online chat – it can be informal, sometimes shorter, but should remain clear and easy to understand. Use lowercase sometimes, especially at the start of sentences, if it feels natural for the chat context.
+
+Most importantly: If the user asks a question that requires a factual, detailed, or intelligent answer, provide one! Your primary goal is still to be helpful and accurate. The casual/Discord user style is just *how* you communicate the correct information, not a replacement for it.
+
+Think 'knowledgeable friend on Discord'. Be smart, be helpful, but talk like a normal person online. Use the provided chat history for context if available.
+
+""" # Your desired system prompt
+MODEL_NAME = "gemini-2.5-flash-latest" # Free tier model
+HISTORY_LIMIT = 10 # How many past messages to look back at for context (adjust as needed)
 # --- >>> END EDIT <<< ---
 
 # Configure the Gemini API client
 try:
     genai.configure(api_key=GEMINI_API_KEY)
-    # Optional: Configure safety settings
     safety_settings = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
@@ -36,9 +46,7 @@ try:
     gemini_model = genai.GenerativeModel(
         MODEL_NAME,
         safety_settings=safety_settings
-        # Optional: Add system_instruction=SYSTEM_PROMPT here if preferred
-        # and supported well by the library version for your chosen model.
-        # Otherwise, we'll prepend it to the user message.
+        # system_instruction=SYSTEM_PROMPT # Can potentially add here depending on model/library support
     )
     print(f"Gemini model '{MODEL_NAME}' initialized.")
 except Exception as e:
@@ -49,8 +57,8 @@ except Exception as e:
 # --- Discord Bot Setup ---
 intents = discord.Intents.default()
 intents.message_content = True # NEEDED to read the message content after the mention
-intents.members = False      # Probably not needed for this bot
-intents.presences = False    # Probably not needed for this bot
+intents.messages = True        # Needed for reading message history
+intents.guilds = True          # Needed for channel context
 
 bot = discord.Bot(intents=intents)
 
@@ -60,67 +68,111 @@ async def on_ready():
     print(f'Logged in as {bot.user.name} ({bot.user.id}) - Gemini Bot')
     print(f'Library Version: {discord.__version__}')
     print('------')
-    # Set a simple status
     await bot.change_presence(activity=discord.Game(name="with Gemini"))
 
 @bot.event
 async def on_message(message: discord.Message):
     """Handles messages sent in channels the bot can see."""
 
-    # 1. Ignore messages from bots (including self) or DMs
     if message.author.bot or not message.guild:
         return
 
-    # 2. Check if the bot itself was mentioned
     if bot.user in message.mentions:
-
-        # 3. Indicate bot is processing (typing indicator)
         async with message.channel.typing():
             print(f"Gemini Bot mentioned by {message.author} in #{message.channel.name}")
 
-            # 4. Extract the user's actual prompt (remove bot mention)
-            # Using clean_content removes markdown formatting of mention
             prompt_text = message.clean_content
-            # Remove the specific mention (adjust if bot name changes or has nickname)
             mention_string = f"@{bot.user.name}"
-            if bot.user.discriminator != "0": # Handle older username#discriminator format if needed
+            if bot.user.discriminator != "0":
                 mention_string += f"#{bot.user.discriminator}"
-
             prompt_text = prompt_text.replace(mention_string, "").strip()
 
             if not prompt_text:
-                print("Mention received but no prompt text found.")
                 await message.reply("You mentioned me, but didn't provide a prompt!", mention_author=False, delete_after=10)
                 return
 
             print(f"User prompt: '{prompt_text}'")
 
-            # 5. Call the Gemini API
+            # --- !!! ADD CONTEXT HISTORY START !!! ---
+            context_history = []
+            try:
+                # Fetch history BEFORE the current message
+                # Limit can impact performance and token usage
+                history = message.channel.history(limit=HISTORY_LIMIT, before=message)
+                # Process messages oldest to newest relevant to this user/bot convo
+                relevant_messages = []
+                async for msg_hist in history:
+                    # Include messages from the user who triggered the command
+                    # AND messages from the bot IF they were a reply to the user
+                    is_user_msg = msg_hist.author.id == message.author.id
+                    is_bot_reply_to_user = (
+                        msg_hist.author.id == bot.user.id and
+                        msg_hist.reference is not None and
+                        msg_hist.reference.message_id is not None
+                    )
+
+                    # To confirm bot reply was to the right user, fetch the referenced message (can be slow)
+                    # Optimization: Assume bot replies in history are likely relevant if context is needed
+                    # Simpler check: is the message from the user or the bot?
+                    if is_user_msg:
+                         relevant_messages.append(f"User: {msg_hist.clean_content}")
+                    elif msg_hist.author.id == bot.user.id:
+                         # Include bot messages only if they seem relevant (e.g. previous replies)
+                         # This simplistic check includes ALL bot messages in history, might need refinement
+                         # A better check would verify msg_hist.reference points to a message by message.author
+                         relevant_messages.append(f"Assistant: {msg_hist.clean_content}")
+
+
+                # Reverse to get chronological order (oldest first)
+                relevant_messages.reverse()
+                context_history = "\n".join(relevant_messages)
+                if context_history:
+                    print(f"--- Using Context ---\n{context_history}\n---------------------")
+                else:
+                    print("--- No relevant context found ---")
+
+            except discord.Forbidden:
+                print("Warning: Missing permissions to read message history.")
+                context_history = "[Could not fetch history due to permissions]"
+            except Exception as hist_e:
+                print(f"Warning: Error fetching message history: {hist_e}")
+                context_history = "[Error fetching history]"
+
+            # --- !!! ADD CONTEXT HISTORY END !!! ---
+
+
+            # --- Call the Gemini API ---
             try:
                 print("Sending request to Gemini API...")
-                # Prepend system prompt to user prompt
-                full_prompt = f"{SYSTEM_PROMPT}\n\nUser: {prompt_text}\nAssistant:"
 
-                response = await gemini_model.generate_content_async(
-                    full_prompt # Send combined prompt
-                    # Alternatively structure as a list if model prefers:
-                    # [SYSTEM_PROMPT, prompt_text]
-                )
+                # Construct the full prompt with System Prompt, History, and current User Prompt
+                full_prompt_parts = [SYSTEM_PROMPT]
+                if context_history:
+                    full_prompt_parts.append("\n\nChat History:")
+                    full_prompt_parts.append(context_history)
+                full_prompt_parts.append(f"\n\nUser: {prompt_text}")
+                full_prompt_parts.append("\nAssistant:") # Prompt the model to reply as assistant
 
-                # 6. Process the response
+                full_prompt = "".join(full_prompt_parts)
+
+                # Check potential length (very rough estimate, actual tokens differ)
+                if len(full_prompt) > 30000: # Models like flash have ~1M tokens, but keep it reasonable
+                    print("Warning: Combined prompt might be too long, potentially truncating history needed.")
+                    # Add truncation logic here if necessary
+
+                response = await gemini_model.generate_content_async(full_prompt)
+
+                # Process response (same as before)
                 if response.parts:
                     gemini_reply = response.text
                     print(f"Gemini response received (length: {len(gemini_reply)})")
 
-                    # 7. Send reply to Discord (handle length limit)
-                    if len(gemini_reply) > 1990: # Discord limit is 2000, leave buffer
+                    if len(gemini_reply) > 1990:
                         print("Response too long, sending truncated version.")
                         gemini_reply = gemini_reply[:1990] + "..."
-
                     await message.reply(gemini_reply, mention_author=False)
 
                 else:
-                    # Check for safety blocks or other issues
                     print(f"Gemini API returned no content. Feedback: {response.prompt_feedback}")
                     await message.reply(f"Sorry, I couldn't generate a response. It might have been blocked due to safety settings. (Feedback: {response.prompt_feedback})", mention_author=False)
 
@@ -137,17 +189,11 @@ async def on_message(message: discord.Message):
 
 
 # --- Run the Bot ---
+# (Rest of the code, including __main__ block, remains the same)
 if __name__ == "__main__":
     print("Attempting to start Gemini bot...")
     try:
         bot.run(DISCORD_TOKEN)
-    except discord.errors.LoginFailure:
-        print("CRITICAL ERROR: Invalid bot token provided for Gemini Bot.")
-    except discord.errors.PrivilegedIntentsRequired as e:
-         print(f"CRITICAL ERROR: Missing required privileged intents: {e}")
-    except Exception as e:
-        print(f"CRITICAL ERROR during Gemini bot startup or runtime: {e}")
-        import traceback
-        traceback.print_exc()
+    # ... (keep existing exception handling) ...
     finally:
         print("Gemini Bot process has concluded.")

@@ -18,16 +18,20 @@ if not GEMINI_API_KEY:
     print("CRITICAL ERROR: GEMINI_API_KEY environment variable not found.")
     sys.exit("Gemini API Key is missing.")
 
-# --- >>> EDIT THESE <<< ---
 SYSTEM_PROMPT = """
 
-You are a helpful AI assistant participating in a Discord chat. When appropriate, adopt the style of a knowledgeable and friendly Discord user.
+You are a cool and helpful AI assistant participating in a Discord chat. When appropriate, adopt the style of a knowledgeable and friendly Discord user.
 
-This means using common internet slang and abbreviations naturally (like smth, idk, tbh, ngl, lol, bc, kinda, tho, etc.), but don't overdo it or make it hard to read. Keep your tone casual and conversational. Your sentence structure should reflect online chat – it can be informal, sometimes shorter, but should remain clear and easy to understand. Use lowercase sometimes, especially at the start of sentences, if it feels natural for the chat context.
+This means using common internet slang and abbreviations naturally (like smth, idk, tbh, ngl, lol, bc, kinda, tho, etc.), but DO NOT OVERDO IT!!!!!! or make it hard to read. Keep your tone casual and conversational. Your sentence structure should reflect online chat – it can be informal, sometimes shorter, but should remain CLEAR and easy to understand. Use lowercase sometimes, especially at the start of sentences, if it feels natural for the chat context.
 
 Most importantly: If the user asks a question that requires a factual, detailed, or intelligent answer, provide one! Your primary goal is still to be helpful and accurate. The casual/Discord user style is just *how* you communicate the correct information, not a replacement for it.
 
 Think 'knowledgeable friend on Discord'. Be smart, be helpful, but talk like a normal person online. Use the provided chat history for context if available.
+
+If the user message is blank, just hay hi and be normal about it as if you just recived a ping.
+
+If possible, try to have your response be shorter than 1990 characters, otherwise it will be cut off.
+Try not using newlines in your messages.
 
 """ # Your desired system prompt
 MODEL_NAME = "gemini-2.5-flash-preview-04-17" # Free tier model
@@ -68,7 +72,7 @@ async def on_ready():
     print(f'Logged in as {bot.user.name} ({bot.user.id}) - Gemini Bot')
     print(f'Library Version: {discord.__version__}')
     print('------')
-    await bot.change_presence(activity=discord.Game(name="with Gemini"))
+    await bot.change_presence(activity=discord.Watching(name="for messages"))
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -86,10 +90,6 @@ async def on_message(message: discord.Message):
             if bot.user.discriminator != "0":
                 mention_string += f"#{bot.user.discriminator}"
             prompt_text = prompt_text.replace(mention_string, "").strip()
-
-            if not prompt_text:
-                await message.reply("You mentioned me, but didn't provide a prompt!", mention_author=False, delete_after=10)
-                return
 
             print(f"User prompt: '{prompt_text}'")
 
@@ -169,19 +169,19 @@ async def on_message(message: discord.Message):
 
                     if len(gemini_reply) > 1990:
                         print("Response too long, sending truncated version.")
-                        gemini_reply = gemini_reply[:1990] + "..."
-                    await message.reply(gemini_reply, mention_author=False)
+                        gemini_reply = gemini_reply[:1990] + "... *(the message was too long)*"
+                    await message.reply(gemini_reply, mention_author=True)
 
                 else:
                     print(f"Gemini API returned no content. Feedback: {response.prompt_feedback}")
-                    await message.reply(f"Sorry, I couldn't generate a response. It might have been blocked due to safety settings. (Feedback: {response.prompt_feedback})", mention_author=False)
+                    await message.reply(f"hey there im sorry i could not make a response. it might have been blocked because of safety settings. (Feedback: {response.prompt_feedback})", mention_author=False)
 
             except Exception as e:
                 print(f"ERROR: An error occurred calling Gemini API or sending reply: {e}")
                 import traceback
                 traceback.print_exc()
                 try:
-                    await message.reply("Sorry, an error occurred while processing your request.", mention_author=False)
+                    await message.reply("hey there im sorry, there was an error. ping @elouangrimm to ask for help.", mention_author=False)
                 except discord.Forbidden:
                     print("ERROR: Could not send error message to Discord (Forbidden).")
                 except Exception as discord_e:

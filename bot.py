@@ -4,6 +4,8 @@ import sys
 import asyncio
 import google.generativeai as genai
 from dotenv import load_dotenv
+import datetime
+from discord.ext import tasks
 
 # --- Configuration ---
 load_dotenv() # Loads .env file for local development
@@ -35,7 +37,7 @@ Try not using newlines in your messages.
 
 """ # Your desired system prompt
 MODEL_NAME = "gemini-2.5-flash-preview-04-17" # Free tier model
-HISTORY_LIMIT = 10 # How many past messages to look back at for context (adjust as needed)
+HISTORY_LIMIT = 15 # How many past messages to look back at for context (adjust as needed)
 # --- >>> END EDIT <<< ---
 
 # Configure the Gemini API client
@@ -66,17 +68,52 @@ intents.guilds = True          # Needed for channel context
 
 bot = discord.Bot(intents=intents)
 
+last_interaction_time = None
+
+current_bot_status = discord.Status.idle # Start as idle
+
+default_activity = discord.Game(name="with Gemini")
+
 @bot.event
 async def on_ready():
     """Runs once when the bot connects and is ready."""
+    global last_interaction_time
     print(f'Logged in as {bot.user.name} ({bot.user.id}) - Gemini Bot')
     print(f'Library Version: {discord.__version__}')
     print('------')
-    await bot.change_presence(activity=discord.Watching(name="for messages"))
+
+    # Set initial status to idle
+    last_interaction_time = datetime.datetime.now(datetime.timezone.utc) # Initialize time
+    try:
+        print(f"Setting initial status to {current_bot_status}...")
+        await bot.change_presence(status=current_bot_status, activity=default_activity)
+        print("Initial status set.")
+    except Exception as e:
+        print(f"Error setting initial presence: {e}")
+
+    # Start the background task
+    status_check_loop.start()
+    print("Status check loop started.")
 
 @bot.event
 async def on_message(message: discord.Message):
     """Handles messages sent in channels the bot can see."""
+    global last_interaction_time # We need to modify the global variable
+    global current_bot_status    # We need to modify the global variable
+
+    # --- Status Update ---
+    print(f"Mention received from {message.author}. Updating last interaction time.")
+    last_interaction_time = datetime.datetime.now(datetime.timezone.utc)
+    # Change status to online if it's not already online
+    if current_bot_status != discord.Status.online:
+        print("Current status is not online, changing to online...")
+        try:
+            await bot.change_presence(status=discord.Status.online, activity=default_activity)
+            current_bot_status = discord.Status.online # Update our tracked status
+            print("Status changed to online.")
+        except Exception as e:
+            print(f"Error changing presence to online: {e}")
+    # --- End Status Update ---
 
     if message.author.bot or not message.guild:
         return
@@ -187,13 +224,54 @@ async def on_message(message: discord.Message):
                 except Exception as discord_e:
                     print(f"ERROR: Could not send error message to Discord: {discord_e}")
 
+@tasks.loop(minutes=1.0) # Check every minute
+async def status_check_loop():
+    global last_interaction_time
+    global current_bot_status
+
+    if last_interaction_time is None: # Should not happen after on_ready, but safety check
+        return
+
+    # Calculate time difference
+    now = datetime.datetime.now(datetime.timezone.utc)
+    time_since_last_interaction = now - last_interaction_time
+    idle_threshold = datetime.timedelta(minutes=IDLE_TIMEOUT_MINUTES)
+
+    # Check if timeout exceeded AND current status is not already idle
+    if time_since_last_interaction > idle_threshold and current_bot_status != discord.Status.idle:
+        print(f"Idle timeout exceeded ({time_since_last_interaction}). Changing status to idle.")
+        try:
+            await bot.change_presence(status=discord.Status.idle, activity=default_activity)
+            current_bot_status = discord.Status.idle # Update tracked status
+            print("Status changed to idle.")
+        except Exception as e:
+            print(f"Error changing presence to idle: {e}")
+    # Optional: Log if condition not met for debugging
+    # elif current_bot_status == discord.Status.idle:
+    #     print("Status check: Already idle.")
+    # else:
+    #     print(f"Status check: Still active (Last interaction: {time_since_last_interaction} ago).")
+
+
+@status_check_loop.before_loop
+async def before_status_check():
+    # Ensure the bot is ready before the loop starts
+    await bot.wait_until_ready()
+    print("Background status check loop is ready.")
 
 # --- Run the Bot ---
-# (Rest of the code, including __main__ block, remains the same)
 if __name__ == "__main__":
     print("Attempting to start Gemini bot...")
     try:
         bot.run(DISCORD_TOKEN)
-    # ... (keep existing exception handling) ...
+    # ... (keep existing exception handling from previous version) ...
+    except discord.errors.LoginFailure:
+        print("CRITICAL ERROR: Invalid bot token provided for Gemini Bot.")
+    except discord.errors.PrivilegedIntentsRequired as e:
+         print(f"CRITICAL ERROR: Missing required privileged intents: {e}")
+    except Exception as e:
+        print(f"CRITICAL ERROR during Gemini bot startup or runtime: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         print("Gemini Bot process has concluded.")
